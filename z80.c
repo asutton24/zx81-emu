@@ -6,6 +6,8 @@ dbyte ix = 0;
 dbyte iy = 0;
 byte regs[7];
 byte altRegs[7];
+byte ioIN[256];
+byte ioOUT[256];
 byte f = 0;
 byte af = 0;
 byte in = 0;
@@ -15,6 +17,27 @@ byte iff2 = 0;
 Memory* mem = NULL;
 byte halt = 0;
 byte intMode = 0;
+byte intComplete = 0;
+byte interrupting = 0;
+byte intByte = 0;
+byte lastIO = 0;
+byte readFromMem = 1;
+byte altByte = 0;
+
+byte interrupt(byte n){
+    if (iff1){
+        interrupting = 1;
+        intByte = n;
+    }
+    halt = 0;
+    return 0;
+}
+
+byte nmi(){
+    interrupting = 2;
+    halt = 0;
+    return 0;
+}
 
 byte readRegisters(byte x, char set){
     byte* r;
@@ -72,7 +95,7 @@ dbyte readreg16(char reg, char set){
         case 'd':
             return r[3] * 256 + r[4];
         case 'h':
-            return r[5] * 256 + r[5];
+            return r[5] * 256 + r[6];
     }
     return 0;
 }
@@ -223,7 +246,7 @@ int r16math(char reg, dbyte val, char sign){
     if (sign == '+'){
         writeR16(reg, readR16(reg) + val);
     } else if (sign == '-'){
-        writeR16(reg, readR16(reg) + (val ^ 0xFFFF) + 1);
+        writeR16(reg, readR16(reg) - val);
     }
     return 0;
 }
@@ -349,10 +372,10 @@ int acmOperations(byte num, byte mode){
             aMath(num, '&', 0);
             break;
         case 5:
-            aMath(num, '|', 0);
+            aMath(num, '^', 0);
             break;
         case 6:
-            aMath(num, '^', 0);
+            aMath(num, '|', 0);
             break;
         case 7:
             f = acm(num, '-', 0) / 256;
@@ -372,9 +395,10 @@ byte inc_dec(byte num, char sign){
         num--;
         setAllFlags(num & 128, num == 0, num % 16 == 15, num == 0x7F, 1, readFlag('c'));
     }
+    return num;
 }
 
-int memSet(){
+int memSetFullRam(){
     if (mem != NULL){
         freeMemory(mem);
         mem = NULL;
@@ -442,7 +466,7 @@ int misccmds(){
             temp2 += readFlag('c');
             r16math('h', temp2, '+');
             tempB = (!(temp & 32768) && !(temp2 & 32768) && (readR16('h') & 32768)) || ((temp & 32768) && (temp2 & 32768) && !(readR16('h') & 32768));
-            setAllFlags((readR16('h') & 32768 != 0), readR16('h') == 0, ((temp % 4096) + (temp2 % 4096) > 4095), tempB, 0, (temp + temp2) > 0xFFFF);
+            setAllFlags(((readR16('h') & 32768) != 0), readR16('h') == 0, ((temp % 4096) + (temp2 % 4096) > 4095), tempB, 0, (temp + temp2) > 0xFFFF);
             cycles = 15;
         } else if (low == 2){
             temp = readR16('h');
@@ -451,8 +475,50 @@ int misccmds(){
             temp2 -= readFlag('c');
             r16math('h', temp2, '-');
             tempB = (!(temp & 32768) && (temp2 & 32768) && (readR16('h') & 32768)) || ((temp & 32768) && !(temp2 & 32768) && !(readR16('h') & 32768));
-            setAllFlags((readR16('h') & 32768 != 0), readR16('h') == 0, ((temp % 4096) - (temp2 % 4096) < 0), tempB, 1, (temp - temp2) < 0);
+            setAllFlags(((readR16('h') & 32768) != 0), readR16('h') == 0, ((temp % 4096) - (temp2 % 4096) < 0), tempB, 1, (temp - temp2) < 0);
             cycles = 15;
+        } else if (mid == 5 && low == 7){
+            temp = readR(rhash('a'));
+            temp2 = read(mem, readR16('h'));
+            tempB = readR(rhash('a'));
+            temp = ((temp & 0xF0) + ((temp2 & 0xF0) >> 4)) & 0xFF;
+            temp2 = (((temp2 & 0xF) << 4) + (tempB & 0xF)) & 0xFF;
+            writeR(rhash('a'), temp);
+            write(mem, readR16('h'), temp2);
+            tempB = temp;
+            setAllFlags(tempB & 128, tempB == 0, 0, getParity(tempB) % 2 == 0, 0, readFlag('c'));
+            cycles = 18;
+        } else if (mid == 4 && low == 7){
+            temp = readR(rhash('a'));
+            temp2 = read(mem, readR16('h'));
+            tempB = readR(rhash('a'));
+            temp = ((temp & 0xF0) + ((temp2 & 0xF))) & 0xFF;
+            temp2 = (((temp2 & 0xF0) >> 4) + ((tempB & 0xF) << 4)) & 0xFF;
+            writeR(rhash('a'), temp);
+            write(mem, readR16('h'), temp2);
+            tempB = temp;
+            setAllFlags(tempB & 128, tempB == 0, 0, getParity(tempB) % 2 == 0, 0, readFlag('c'));
+            cycles = 18;
+        } else if (mid == 1 && low == 5){
+            pc = read16(mem, sp) - 1;
+            sp += 2;
+            cycles = 14;
+            intComplete = 1;
+        } else if (mid == 0 && low == 5){
+            pc = read16(mem, sp) - 1;
+            sp += 2;
+            cycles = 14;
+            iff1 = iff2;
+            intComplete = 1;
+        } else if (mid != 6 && low == 0){
+            setAllFlags(ioIN[readR(rhash('c'))] & 128, ioIN[readR(rhash('c'))] == 0, 0, getParity(ioIN[readR(rhash('c'))]) % 2 == 0, 0, readFlag('c'));
+            writeR(mid, ioIN[readR(rhash('c'))]);
+            lastIO = 1;
+            cycles = 12;
+        } else if (mid != 6 && low == 1){
+            ioOUT[readR(rhash('c'))] = readR(mid);
+            lastIO = 2;
+            cycles = 12;
         }
     } else if (high == 2){
         if (mid >= 4 && low == 0){
@@ -461,32 +527,129 @@ int misccmds(){
             if (mid % 2 == 0){
                 sign = '+';
             }
-            do {
-                write(mem, readR16('d'), read(mem, readR16('h')));
-                r16math('h', 1, sign);
-                r16math('d', 1, sign);
-                r16math('b', 1, '-');
-                cycles += 21;
-            } while (mid >= 6 && readR16('b') != 0);
+            write(mem, readR16('d'), read(mem, readR16('h')));
+            r16math('h', 1, sign);
+            r16math('d', 1, sign);
+            r16math('b', 1, '-');
+            if (mid >= 6 && readR16('b') != 0){
+                cycles = 21;
+                pc -= 2;
+            } else {
+                cycles = 16;
+            }
             setAllFlags(readFlag('s'), readFlag('z'), 0, readR16('b') != 0, 0, readFlag('c'));
-            cycles -= 5;
         } else if (mid >= 4 && low == 1){
-            cycles = 0;
             char sign = '-';
             if (mid % 2 == 0){
                 sign = '+';
             }
-            do {
-                r16math('h', 1, sign);
-                r16math('b', 1, '-');
-                cycles += 21;
-            } while (mid >= 6 && readR(rhash('a')) != read(mem, readR16('h')) && readR16('b') != 0);
+            r16math('h', 1, sign);
+            r16math('b', 1, '-');
+            if (mid >= 6 && readR(rhash('a')) != read(mem, readR16('h')) && readR16('b') != 0){
+                pc -= 2;
+                cycles = 21;
+            } else {
+                cycles = 16;
+            }
             temp = acm(read(mem, readR16('h')), '-', 0) / 256;
             setAllFlags(temp & 128, temp & 64, temp & 16, readR16('b') != 0, 1, readFlag('c'));
-            cycles -= 5;
+        } else if (mid >= 4 && low == 2){
+            char sign = '-';
+            if (mid % 2 == 0){
+                sign = '+';
+            }
+            setFlag('n', 1);
+            write(mem, readR16('h'), ioIN[readR(rhash('c'))]);
+            r16math('h', 1, sign);
+            writeR(rhash('b'), readR(rhash('b')) - 1);
+            setFlag('z', readR(rhash('b')) == 0);
+            if (mid >= 6 && !readFlag('z')){
+                pc -= 2;
+                cycles = 21;
+            } else {
+                cycles = 16;
+            }
+            lastIO = 1;
+        } else if (mid >= 4 && low == 3){
+            char sign = '-';
+            if (mid % 2 == 0){
+                sign = '+';
+            }
+            setFlag('n', 1);
+            ioOUT[readR(rhash('c'))] = read(mem, readR16('h'));
+            r16math('h', 1, sign);
+            writeR(rhash('b'), readR(rhash('b')) - 1);
+            setFlag('z', readR(rhash('b')) == 0);
+            if (mid >= 6 && !readFlag('z')){
+                pc -= 2;
+                cycles = 21;
+            } else {
+                cycles = 16;
+            }
+            lastIO = 2;
         }
     }
     pc++;
+    re = (re & 128) + ((re + 1) & 127);
+    return cycles;
+}
+
+int indexbitcmds(dbyte index){
+    int cycles = 0;
+    pc++;
+    char off = read(mem, pc);
+    pc++;
+    byte op = read(mem, pc);
+    byte low = op % 16;
+    byte high = op / 16;
+    if (op >> 6 == 1){
+        byte b = (op >> 3) & 7;
+        setFlag('h', 1);
+        setFlag('n', 0);
+        setFlag('z', (read(mem, index + off) & (1 << b)) == 0);
+        cycles = 20;
+    } else if (op >> 6 == 2) {
+        byte b = (op >> 3) & 7;
+        write(mem, index + off, read(mem, index + off) & (255 - (1 << b)));
+        cycles = 23;
+    } else if (op >> 6 == 3) {
+        byte b = (op >> 3) & 7;
+        write(mem, index + off, read(mem, index + off) | (1 << b));
+        cycles = 23;
+    } else if (low == 6){
+        if (high == 0){
+            write(mem, index + off, rollByteFlags(read(mem, index + off), 'l', 1));
+            cycles = 23;
+        } else if (high == 1){
+            write(mem, index + off, rollByteFlags(read(mem, index + off), 'l', 0));
+            cycles = 23;
+        } else if (high == 2){
+            setFlag('c', 0);
+            write(mem, index + off, rollByteFlags(read(mem, index + off), 'l', 0));
+            cycles = 23;
+        }
+    } else if (low == 14){
+        if (high == 0){
+            write(mem, index + off, rollByteFlags(read(mem, index + off), 'r', 1));
+            cycles = 23;
+        } else if (high == 1){
+            write(mem, index + off, rollByteFlags(read(mem, index + off), 'r', 0));
+            cycles = 23;
+        } else if (high == 2){
+            setFlag('c', 0);
+            write(mem, index + off, (read(mem, index + off) & 128) + rollByte(read(mem, index + off), 'r', 0));
+            setFlag('s', read(mem, index + off) & 128);
+            setFlag('z', read(mem, index + off) == 0);
+            setFlag('p', getParity(read(mem, index + off)) % 2 == 0);
+            cycles = 23;
+        } else if (high == 3){
+            setFlag('c', 0);
+            write(mem, index + off, rollByteFlags(read(mem, index + off), 'r', 0));
+            cycles = 23;
+        }
+    }
+    pc++;
+    re = (re & 128) + ((re + 1) & 127);
     return cycles;
 }
 
@@ -504,6 +667,9 @@ int indexcmds(byte mode){
     char off;
     pc++;
     byte op = read(mem, pc);
+    if (op == 0xCB){
+        return indexbitcmds(*index);
+    }
     byte high = op >> 6;
     byte mid = (op >> 3) & 7;
     byte low = op & 7;
@@ -544,10 +710,10 @@ int indexcmds(byte mode){
             *index += temp;
             cycles = 15;
         } else if (low == 3 && mid == 4){
-            *index++;
+            (*index)++;
             cycles = 10;
         }else if (low == 3 && mid == 5){
-            *index--;
+            (*index)--;
             cycles = 10;
         }
     } else if (high == 1){
@@ -585,8 +751,12 @@ int indexcmds(byte mode){
             *index = read16(mem, sp);
             write16(mem, sp, temp);
             cycles = 23;
+        } else if (low == 1 && mid == 5){
+            pc = *index - 1;
+            cycles = 8;
         }
     }
+    re = (re & 128) + ((re + 1) & 127);
     pc++;
     return cycles;
 }
@@ -599,20 +769,101 @@ int bitcmds(){
     byte mid = (op >> 3) & 7;
     byte low = op & 7;
     if (high == 0){
-        if (mid == 0 && low != 6){
-            writeR(low, rollByteFlags(readR(low), 'l', 1));
-            cycles = 8;
-        } else if (mid == 0){
-            write(mem, readR16('h'), rollByteFlags(read(mem, readR16('h')), 'l', 1));
-            cycles = 15;
+        if (mid < 4){
+            if (low != 6){
+                writeR(low, rollByteFlags(readR(low), (mid % 2 == 0) * 'l' + (mid % 2 == 1) * 'r', mid < 2));
+                cycles = 8;
+            } else {
+                write(mem, readR16('h'), rollByteFlags(read(mem, readR16('h')), (mid % 2 == 0) * 'l' + (mid % 2 == 1) * 'r', mid < 2));
+                cycles = 15;
+            }
+        } else if (mid == 4){
+            setFlag('c', 0);
+            if (low != 6){
+                writeR(low, rollByteFlags(readR(low), 'l', 0));
+                cycles = 8;
+            } else {
+                write(mem, readR16('h'), rollByteFlags(read(mem, readR16('h')), 'l', 0));
+                cycles = 15;
+            }
+        } else if (mid == 5){
+            setFlag('c', 0);
+            if (low != 6){
+                writeR(low, (readR(low) & 128) + rollByte(readR(low), 'r', 0));
+                setFlag('s', readR(low) & 128);
+                setFlag('z', readR(low) == 0);
+                setFlag('p', getParity(readR(low)) % 2 == 0);
+                cycles = 8;
+            } else {
+                write(mem, readR16('h'), (read(mem, readR16('h')) & 128) + rollByte(read(mem, readR16('h')), 'r', 0));
+                setFlag('s', read(mem, readR16('h')) & 128);
+                setFlag('z', read(mem, readR16('h')) == 0);
+                setFlag('p', getParity(read(mem, readR16('h'))) % 2 == 0);
+                cycles = 15;
+            }
+        } else if (mid == 7){
+            setFlag('c', 0);
+            if (low != 6){
+                writeR(low, rollByteFlags(readR(low), 'r', 0));
+                cycles = 8;
+            } else {
+                write(mem, readR16('h'), rollByteFlags(read(mem, readR16('h')), 'r', 0));
+                cycles = 15;
+            }
         } 
+    } else if (high == 1){
+        setFlag('h', 1);
+        setFlag('n', 0);
+        if (low != 6){
+            setFlag('z', (readR(low) & (1 << mid)) == 0);
+            cycles = 8;
+        } else {
+            setFlag('z', (read(mem, readR16('h')) & (1 << mid)) == 0);
+            cycles = 12;
+        }
+    } else if (high == 2){
+        if (low != 6){
+            writeR(low, readR(low) & (255 - (1 << mid)));
+            cycles = 8;
+        } else {
+            write(mem, readR16('h'), read(mem, readR16('h')) & (255 - (1 << mid)));
+            cycles = 15;
+        }
+    } else if (high == 3){
+        if (low != 6){
+            writeR(low, readR(low) | (1 << mid));
+            cycles = 8;
+        } else {
+            write(mem, readR16('h'), read(mem, readR16('h')) | (1 << mid));
+            cycles = 15;
+        }
     }
+    pc++;
+    re = (re & 128) + ((re + 1) & 127);
     return cycles;
 }
 
 int runcmd(){
     int cycles = 0;
-    byte op = read(mem, pc);
+    lastIO = 0;
+    byte op;
+    if (interrupting == 2){
+        sp -= 2;
+        write16(mem, sp, pc + 3);
+        pc = 0x66;
+        re = (re & 128) + ((re + 1) & 127);
+        return 11;
+    } else if (interrupting == 1){
+        if (intMode == 0){
+            op = intByte;
+        } else if (intMode == 1){
+            op = 0xFF;
+        } else if (intMode == 2){
+            op = read(mem, in * 256 + intByte);
+        }
+    }
+    if (!readFromMem && !interrupting) op = altByte;
+    else if (!interrupting) op = read(mem, pc);
     if (op == 0xDD || op == 0xFD){
         return indexcmds(op);
     } else if (op == 0xED){
@@ -621,6 +872,7 @@ int runcmd(){
         return bitcmds();
     } else if (halt || op == 0){
         pc++;
+        re = (re & 128) + ((re + 1) & 127);
         return 4;
     }
     dbyte temp;
@@ -741,6 +993,27 @@ int runcmd(){
         } else if (low == 7 && mid < 4){
             writeR(rhash('a'), rollByte(readR(rhash('a')), (mid % 2 == 0) * 'l' + (mid % 2 == 1) * 'r', mid < 2));
             cycles = 4;
+        } else if (mid == 3 && low == 0){
+            pc++;
+            pc += ((char)read(mem, pc));
+            cycles = 12;
+        } else if (mid >= 4 && low == 0){
+            pc++;
+            if (readFlag('c' * (mid / 2 == 3) + 'z' * (mid / 2 == 2)) == (mid % 2)){
+                pc += ((char)read(mem, pc));
+                cycles = 12;
+            } else {
+                cycles = 7;
+            }
+        } else if (mid == 2 && low == 0){
+            pc++;
+            writeR(rhash('b'), readR(rhash('b')) - 1);
+            if (readR(rhash('b')) != 0){
+                pc += ((char)read(mem, pc));
+                cycles = 13;
+            } else {
+                cycles = 8;
+            }
         }
     } else if (high == 1){
         if (mid != 6 && low != 6){
@@ -811,8 +1084,69 @@ int runcmd(){
             iff1 = 1;
             iff2 = 1;
             cycles = 4;
+        } else if (mid == 0 && low == 3){
+            pc++;
+            pc = read16(mem, pc) - 1;
+            cycles = 10;
+        } else if (low == 2){
+            pc++;
+            if (readFlag('z' * (mid / 2 == 0) + 'c' * (mid / 2 == 1) + 'p' * (mid / 2 == 2) + 's' * (mid / 2 == 3)) == (mid % 2)){
+                pc = read16(mem, pc) - 1;
+            } else {
+                pc++;
+            }
+            cycles = 10;
+        } else if (mid == 5 && low == 1){
+            pc = readR16('h') - 1;
+            cycles = 4;
+        } else if (mid == 1 && low == 5){
+            sp -= 2;
+            write16(mem, sp, pc + 3);
+            pc++;
+            pc = read16(mem, pc) - 1;
+            cycles = 17;
+        } else if (low == 4){
+            if (readFlag('z' * (mid / 2 == 0) + 'c' * (mid / 2 == 1) + 'p' * (mid / 2 == 2) + 's' * (mid / 2 == 3)) == (mid % 2)){
+                sp -= 2;
+                write16(mem, sp, pc + 3);
+                pc++;
+                pc = read16(mem, pc) - 1;
+                cycles = 17;
+            } else {
+                pc += 2;
+                cycles = 10;
+            }
+        } else if (mid == 1 && low == 1){
+            pc = read16(mem, sp) - 1;
+            sp += 2;
+            cycles = 10;
+        } else if (low == 0){
+            if (readFlag('z' * (mid / 2 == 0) + 'c' * (mid / 2 == 1) + 'p' * (mid / 2 == 2) + 's' * (mid / 2 == 3)) == (mid % 2)){
+                pc = read16(mem, sp) - 1;
+                sp += 2;
+                cycles = 11;
+            } else {
+                cycles = 5;
+            }
+        } else if (low == 7){
+            sp -= 2;
+            write16(mem, sp, pc + 1);
+            pc = 8 * mid - 1;
+            cycles = 11;
+        } else if (mid == 3 && low == 3){
+            pc++;
+            writeR(rhash('a'), ioIN[read(mem, pc)]);
+            lastIO = 1;
+            cycles = 11;
+        } else if (mid == 2 && low == 3){
+            pc++;
+            ioOUT[read(mem, pc)] = readR(rhash('a'));
+            lastIO = 2;
+            cycles = 11;
         }
     }
+    re = (re & 128) + ((re + 1) & 127);
+    interrupting = 0;
     pc++;
     return cycles;
 }

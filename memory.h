@@ -29,7 +29,7 @@ typedef struct memoryList{
 byte read(Memory* m, dbyte add);
 byte write(Memory* m, dbyte add, byte val);
 dbyte read16(Memory* m, dbyte add);
-byte write16(Memory* m, dbyte add, dbyte val)
+byte write16(Memory* m, dbyte add, dbyte val);
 int blockSet(byte* data, dbyte len, bankList* b, byte index);
 int addBank(bankList* b, char type);
 int addBankList(Memory* m, dbyte low, dbyte high);

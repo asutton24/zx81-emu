@@ -2,7 +2,7 @@
 
 byte read(Memory* m, dbyte add){
     bankList* current = m->head;
-    while (current->high > add){
+    while (current != NULL){
         if (add >= current->low && add <= current->high){
             bankNode* node = current->head;
             for (int i = 0; i < current->bank; i++){
@@ -18,7 +18,7 @@ byte read(Memory* m, dbyte add){
 
 byte write(Memory* m, dbyte add, byte val){
     bankList* current = m->head;
-    while (current->high > add){
+    while (current != NULL){
         if (add >= current->low && add <= current->high){
             bankNode* node = current->head;
             for (int i = 0; i < current->bank; i++){
@@ -26,8 +26,8 @@ byte write(Memory* m, dbyte add, byte val){
             }
             if (node->type == 'w'){
                 node->bank[add - current->low] = val;
-                return 1;
             }
+            return 1;
         } else {
             current = current->next;
         }
@@ -42,6 +42,7 @@ dbyte read16(Memory* m, dbyte add){
 byte write16(Memory* m, dbyte add, dbyte val){
     return write(m, add, val % 256) + write(m, add + 1, val >> 8);
 }
+
 int blockSet(byte* data, dbyte len, bankList* b, byte index){
     bankNode* cur = b->head;
     if (index >= b->length) return -1;
