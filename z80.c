@@ -269,18 +269,18 @@ dbyte acm(byte num, char sign, byte carry){
         case '+':
             a += num;
             if (carry) a += 1;
-            setFlag('h', (old & 15) + (num & 15) > 15);
-            setFlag('v', ((old & 128) && (num & 128) && !(a & 128)) || (!(old & 128) && !(num & 128) && (a & 128)));
+            setFlag('h', (old & 15) + (num & 15) + carry > 15);
+            setFlag('v', ((old & 128) && ((num + carry) & 128) && !(a & 128)) || (!(old & 128) && !((num + carry) & 128) && (a & 128)));
             setFlag('n', 0);
-            setFlag('c', old + num > 255);
+            setFlag('c', old + num + carry > 255);
             break;
         case '-':
             a -= num;
             if (carry) a -= 1;
-            setFlag('h', (old & 15) - (num & 15) < 0);
-            setFlag('v', ((old & 128) && !(num & 128) && !(a & 128)) || (!(old & 128) && (num & 128) && (a & 128)));
+            setFlag('h', (old & 15) - (num & 15) - carry < 0);
+            setFlag('v', ((old & 128) && !((num - carry) & 128) && !(a & 128)) || (!(old & 128) && ((num - carry) & 128) && (a & 128)));
             setFlag('n', 0);
-            setFlag('c', old - num < 0);
+            setFlag('c', old - num - carry < 0);
             break;
         case '&':
             a = a & num;
@@ -543,15 +543,15 @@ int misccmds(){
             if (mid % 2 == 0){
                 sign = '+';
             }
-            r16math('h', 1, sign);
-            r16math('b', 1, '-');
-            if (mid >= 6 && readR(rhash('a')) != read(mem, readR16('h')) && readR16('b') != 0){
+            if (mid >= 6 && readR(rhash('a')) != read(mem, readR16('h')) && readR16('b') - 1 != 0){
                 pc -= 2;
                 cycles = 21;
             } else {
                 cycles = 16;
             }
             temp = acm(read(mem, readR16('h')), '-', 0) / 256;
+            r16math('h', 1, sign);
+            r16math('b', 1, '-');
             setAllFlags(temp & 128, temp & 64, temp & 16, readR16('b') != 0, 1, readFlag('c'));
         } else if (mid >= 4 && low == 2){
             char sign = '-';

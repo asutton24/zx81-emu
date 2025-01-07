@@ -6,8 +6,8 @@ typedef dbyte Tile[8];
 typedef Color Palette[3];
 
 byte res = 1;
-dbyte screen_width = 256;
-dbyte screen_height = 192;
+dbyte screen_width = 320;
+dbyte screen_height = 240;
 Tile* spritesheet;
 Palette* palettes;
 dbyte spr_length;

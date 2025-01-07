@@ -36,9 +36,9 @@ int drawScreen(){
     for (int i = 0; i < 24; i++){
         for (int j = 0; j < 32; j++){
             if (vram[32 * i + j] % 128 < 64){
-                drawSprite(vram[32 * i + j] % 64, vram[32 * i + j] > 127, 1, 1, 8 * j, 8 * i);
+                drawSprite(vram[32 * i + j] % 64, vram[32 * i + j] > 127, 1, 1, 32 + 8 * j, 24 + 8 * i);
             } else {
-                drawSprite(0, 0, 1, 1, 8 * j, 8 * i);
+                drawSprite(0, 0, 1, 1, 32 + 8 * j, 24 + 8 * i);
 
             }
         }
@@ -276,12 +276,12 @@ int main(){
     double refresh = 1.0 / frameRate;
     double curTime = GetTime();
     byte drawError = 0;
-    FILE* file;
     double nmiTime;
     byte nmiGen = 0;
     int cycles = 0;
     while (!WindowShouldClose() && !drawError){
         curCycles = 0;
+        counter = 0;
         while (GetTime() - curTime < refresh){
             nmiTime = GetTime();
             //file = fopen("debug.bin", "wb");
@@ -305,7 +305,6 @@ int main(){
             if (read16(mem, pc) == 0x78ED) readKeyboard(readR(rhash('b')));
             else if (read(mem, pc) == 0xDB) readKeyboard(readR(rhash('a')));
             curCycles += runcmd();
-            if (pc == 0x2E6) counter++;
             while (GetTime() - curTime < curCycles * cycleTime) cycles++;
             if (GetTime() - nmiTime > 64e-6){
                 if (nmiGen) nmi();
@@ -317,16 +316,12 @@ int main(){
         curTime = GetTime();
     }
     freeAssets();
-    if (drawError){
-        char error = '1';
-        file = fopen("log.txt", "wb");
-        fwrite(&error, 1, 1, file);
-        fclose(file);
-    } else if (halt){
-        char error = '2';
-        file = fopen("log.txt", "wb");
-        fwrite(&error, 1, 1, file);
-        fclose(file);
-    }
+    freeMemory(mem);
+    //FILE* file;
+    //byte ram[1024];
+    //for (int i = 0; i < 1024; i++) ram[i] = read(mem, 0x4000 + i);
+    //file = fopen("log.bin", "wb");
+    //fwrite(ram, 1, 1024, file);
+    //fclose(file);
     return 0;
 }
